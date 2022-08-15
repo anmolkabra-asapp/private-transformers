@@ -198,6 +198,10 @@ class AuxiliaryArguments:
     orthogonal_projection_path: Optional[str] = field(default=None)
     orthogonal_projection_rank: int = field(default=100)
 
+    verbose: bool = field(
+        default=False, metadata={"help": "Flag for verbose printing"}
+    )
+
     def __post_init__(self):
         self.eval_spectrum = self.eval_spectrum.lower() in TRUE_TAGS  # noqa
         self.store_grads = self.store_grads.lower() in TRUE_TAGS  # noqa

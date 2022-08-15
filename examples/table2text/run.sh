@@ -5,7 +5,7 @@ data_dir=${2}
 task_mode=${3}
 model_name_or_path=${4:-"gpt2"} # One of distilgpt2, gpt2, gpt2-medium, gpt2-large
 target_epsilon=${5:-"8"}
-cache_dir=${6}
+cache_dir=${6:-"$HOME/.cache/huggingface/transformers/"}
 clipping_mode=${7:-"ghost"} # Fill 'default' to turn this off.
 non_private=${8:-"no"}
 
@@ -29,14 +29,15 @@ else
 fi
 
 # Arguments in the last two lines are the most important.
-python -m table2text.run_language_modeling \
+python -u -m table2text.run_language_modeling \
+  --verbose \
   --output_dir ${output_dir} --overwrite_output_dir \
   --task_mode ${task_mode} \
   --model_name_or_path ${model_name_or_path} \
   --tokenizer_name ${model_name_or_path} \
   --do_train --do_eval \
   --line_by_line \
-  --save_steps 100 --save_total_limit 1 --save_at_last no \
+  --save_steps 100 --save_total_limit 1 --save_at_last yes \
   --logging_dir ${output_dir} --logging_steps -1 \
   --seed 0 \
   --eval_steps 100 --eval_epochs 2 --max_eval_batches 100 --evaluation_strategy epoch --evaluate_before_training "no" --evaluate_during_training "yes" --per_device_eval_batch_size 10 \
@@ -48,3 +49,10 @@ python -m table2text.run_language_modeling \
   --non_private ${non_private} \
   --clipping_mode "${clipping_mode}" \
   --cache_dir ${cache_dir}
+
+# Evaluate metrics of model generations against the test set references
+if [[ ${task_mode} == "e2e" ]]; then
+  ../../e2e-metrics/measure_scores.py \
+  "${data_dir}/clean_references_test.txt" \
+  "${output_dir}/generations_model/eval/global_step_00000410.txt"
+fi

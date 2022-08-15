@@ -20,8 +20,8 @@ using a masked language modeling (MLM) loss. XLNet is fine-tuned using a permuta
 """
 
 import json
-import logging
 import os
+import logging
 
 import torch
 from ml_swissknife import utils
@@ -36,6 +36,7 @@ from .misc import get_all_datasets, get_prompt_dataset
 from .trainer import Trainer
 
 logger = logging.getLogger(__name__)
+logger.propagate = False
 
 MODEL_CONFIG_CLASSES = list(MODEL_WITH_LM_HEAD_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
@@ -71,11 +72,31 @@ def main():
         )
 
     # Setup logging
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
-        level=logging.INFO if training_args.local_rank in [-1, 0] else logging.WARN,
+    if auxiliary_args.verbose:
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO \
+            if training_args.local_rank in [-1, 0] else logging.WARN
+    logger.setLevel(log_level)
+    # Create file handler for logging
+    os.makedirs(training_args.output_dir, exist_ok=True)
+    fh = logging.FileHandler(
+        os.path.join(training_args.output_dir, 'lm.log'), mode='w'
     )
+    fh.setLevel(log_level)
+    # Create console handler for logging
+    ch = logging.StreamHandler()
+    ch.setLevel(log_level)
+    # Create formatter and add to handlers
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    fh.setFormatter(formatter)
+    ch.setFormatter(formatter)
+    # Add the handlers to the logger
+    logger.addHandler(fh)
+    logger.addHandler(ch)
+
     logger.warning(
         "Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
         training_args.local_rank,
@@ -111,16 +132,17 @@ def main():
         config=config,
         cache_dir=model_args.cache_dir,
     )
-    print(f'base gpt2 model: {model_args.model_name_or_path}')
-    print(gpt2)
+    logger.debug(f'base gpt2 model: {model_args.model_name_or_path}')
+    logger.debug(gpt2)
 
     # Clone the embedding into the lm_head for better initialization.
     lm_head = gpt2.get_output_embeddings()
     embedding = gpt2.get_input_embeddings()
     lm_head.weight.data.copy_(embedding.weight.data)
-    print(f'Cloning initial embedding into lm_head, '
-          f'checking norms... \n'
-          f'\tlm_head: {lm_head.weight.norm()}, embedding: {embedding.weight.norm()}')
+    logger.debug(f'Cloning initial embedding into lm_head, '
+                 f'checking norms... \n'
+                 f'\tlm_head: {lm_head.weight.norm()}, embedding:'
+                 f' {embedding.weight.norm()}')
     torch.testing.assert_allclose(lm_head.weight, embedding.weight)
     del lm_head, embedding
 
@@ -130,15 +152,15 @@ def main():
         data_args.block_size = min(data_args.block_size, tokenizer.model_max_length)
 
     # Adjust tokenizer and model embeddings.
-    print('adapt tokenizer to include [PAD]')
-    print(f'before len(tokenizer) = {len(tokenizer)}')
+    logger.debug('adapt tokenizer to include [PAD]')
+    logger.debug(f'before len(tokenizer) = {len(tokenizer)}')
     tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-    print(f'after len(tokenizer) = {len(tokenizer)}')
-    print('tokenizer.eos_token:', tokenizer.eos_token, tokenizer.eos_token_id)
-    print('tokenizer.bos_token:', tokenizer.bos_token, tokenizer.bos_token_id)
+    logger.debug(f'after len(tokenizer) = {len(tokenizer)}')
+    logger.debug(f'tokenizer.eos_token: {tokenizer.eos_token}, {tokenizer.eos_token_id}')
+    logger.debug(f'tokenizer.bos_token: {tokenizer.bos_token}, {tokenizer.bos_token_id}')
 
-    print('adapt the size of lm_head and input_embeddings to include [PAD]')
-    print('use avg-based initialization')
+    logger.debug('adapt the size of lm_head and input_embeddings to include [PAD]')
+    logger.debug('use avg-based initialization')
 
     input_embeddings_before = gpt2.get_input_embeddings().weight
     lm_head_before = gpt2.get_output_embeddings().weight
@@ -146,24 +168,24 @@ def main():
 
     input_embeddings_after = gpt2.get_input_embeddings().weight
     lm_head_after = gpt2.get_output_embeddings().weight
-    print(
+    logger.debug(
         f'before lm_head.weight.size() = {lm_head_before.size()}, '
         f'input_embeddings_before.size() = {input_embeddings_before.size()}'
     )
-    print(
+    logger.debug(
         f'after lm_head.weight.size() = {lm_head_after.size()}, '
         f'after input_embeddings_after.size() = {input_embeddings_after.size()}'
     )
     torch.testing.assert_allclose(lm_head_before, lm_head_after[:-1])
-    print('pre-chunk equal for lm_head')
+    logger.debug('pre-chunk equal for lm_head')
     torch.testing.assert_allclose(input_embeddings_before, input_embeddings_after[:-1])
-    print('pre-chunk equal for input_embeddings')
+    logger.debug('pre-chunk equal for input_embeddings')
     lm_head_after.data[-1] = lm_head_before.mean(dim=0)
     input_embeddings_after.data[-1] = input_embeddings_before.mean(dim=0)
 
-    print('double check: ')
-    print('embedding size', gpt2.get_input_embeddings().weight.size())
-    print('lm_head size', gpt2.get_output_embeddings().weight.size())
+    logger.debug('double check: ')
+    logger.debug(f'embedding size {gpt2.get_input_embeddings().weight.size()}')
+    logger.debug(f'lm_head size {gpt2.get_output_embeddings().weight.size()}')
     model = gpt2
 
     train_dataset, val_dataset, eval_dataset, data_collator = get_all_datasets(
@@ -212,8 +234,8 @@ def main():
     params = tuple(param for param in model.parameters() if param.requires_grad)
     names = tuple(name for name, param in model.named_parameters() if param.requires_grad)
     num_trainable_params = sum(param.numel() for param in params)
-    print(f"Number of trainable params: {num_trainable_params / 1e6:.4f} million")
-    print(json.dumps(names, indent=4))
+    logger.debug(f"Number of trainable params: {num_trainable_params / 1e6:.4f} million")
+    logger.debug(json.dumps(names, indent=4))
 
     # TODO: Using a single gigantic parameter group is okay only when `weight_decay` is 0.
     #   Biases and LM parameters should not be decayed perhaps even with privacy.
@@ -260,8 +282,8 @@ def main():
         privacy_args.noise_multiplier = privacy_engine.noise_multiplier
         privacy_args.target_delta = privacy_engine.target_delta
 
-        print('privacy_args: ')
-        print(json.dumps(privacy_args.__dict__, indent=4))
+        logger.debug('privacy_args: ')
+        logger.debug(json.dumps(privacy_args.__dict__, indent=4))
         privacy_engine.attach(optimizer)
 
     # Training.
